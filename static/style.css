@@ -1,0 +1,899 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   chromatex — maximalist stylesheet
+
+   Every colour is a custom property written by JS from the Rust-generated
+   palette, so recolouring the whole site is eight property writes.
+   Every animation is gated on `body:not(.no-motion)` and on
+   prefers-reduced-motion, so the page is fully usable held still.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* Overwritten at runtime from GET /api/palette. These defaults are the
+     seed-7 scheme, so the first paint is already in the right key. */
+  --void: #0b0210;
+  --ink: #f2e9ff;
+  --a: #ff2fb0;
+  --b: #16d6c8;
+  --c: #ffd93d;
+  --d: #6b4bff;
+  --e: #4bff7a;
+  --f: #ff6a1f;
+
+  --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", monospace;
+
+  --rhythm: clamp(3.5rem, 9vw, 8rem);
+  --radius: 18px;
+  --border: 1px solid color-mix(in oklab, var(--ink) 18%, transparent);
+
+  color-scheme: dark;
+}
+
+/* Animating raw custom properties needs them registered, otherwise the
+   browser swaps colours instantly instead of interpolating. */
+@property --a { syntax: "<color>"; inherits: true; initial-value: #ff2fb0; }
+@property --b { syntax: "<color>"; inherits: true; initial-value: #16d6c8; }
+@property --c { syntax: "<color>"; inherits: true; initial-value: #ffd93d; }
+@property --d { syntax: "<color>"; inherits: true; initial-value: #6b4bff; }
+@property --e { syntax: "<color>"; inherits: true; initial-value: #4bff7a; }
+@property --f { syntax: "<color>"; inherits: true; initial-value: #ff6a1f; }
+@property --spin { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+
+* { box-sizing: border-box; }
+
+/* Firefox: the default light scrollbar is a bright slab against this page. */
+* { scrollbar-width: thin; scrollbar-color: var(--c) transparent; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--void);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: clamp(15px, 1.05vw, 17px);
+  line-height: 1.65;
+  overflow-x: hidden;
+  /* Colour transitions make a palette reroll feel like a cross-fade
+     rather than a hard cut. */
+  transition: background-color 900ms ease, color 900ms ease;
+}
+
+body.no-motion *,
+body.no-motion *::before,
+body.no-motion *::after {
+  animation-play-state: paused !important;
+  transition-duration: 1ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+::selection { background: var(--a); color: var(--void); }
+
+/* ───────────────────────────── background ─────────────────────────────
+   Three stacked layers: a slow drifting multi-radial wash, a perspective
+   grid scrolling toward the viewer, and a faint scanline veil. */
+
+.bg-wash,
+.bg-grid,
+.scanlines,
+#lattice {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.bg-wash {
+  background:
+    radial-gradient(60vw 60vw at 12% 8%,  color-mix(in oklab, var(--a) 55%, transparent), transparent 70%),
+    radial-gradient(55vw 55vw at 88% 14%, color-mix(in oklab, var(--d) 55%, transparent), transparent 70%),
+    radial-gradient(70vw 70vw at 50% 92%, color-mix(in oklab, var(--b) 45%, transparent), transparent 72%),
+    radial-gradient(45vw 45vw at 78% 62%, color-mix(in oklab, var(--f) 40%, transparent), transparent 70%),
+    radial-gradient(40vw 40vw at 20% 70%, color-mix(in oklab, var(--e) 35%, transparent), transparent 70%);
+  filter: blur(40px) saturate(140%);
+  opacity: 0.55;
+  animation: wash-drift 34s ease-in-out infinite alternate;
+}
+
+@keyframes wash-drift {
+  0%   { transform: scale(1.05) translate3d(0, 0, 0); }
+  50%  { transform: scale(1.2) translate3d(-3vw, 2vh, 0) rotate(4deg); }
+  100% { transform: scale(1.1) translate3d(3vw, -3vh, 0) rotate(-3deg); }
+}
+
+.bg-grid {
+  background-image:
+    linear-gradient(color-mix(in oklab, var(--ink) 12%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in oklab, var(--ink) 12%, transparent) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: radial-gradient(120vw 90vh at 50% 20%, #000 20%, transparent 80%);
+  opacity: 0.5;
+  animation: grid-crawl 6s linear infinite;
+}
+
+@keyframes grid-crawl {
+  to { background-position: 64px 64px, 64px 64px; }
+}
+
+#lattice { opacity: 0.85; mix-blend-mode: screen; }
+
+.scanlines {
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0 2px,
+    color-mix(in oklab, var(--void) 55%, transparent) 2px 4px
+  );
+  opacity: 0.35;
+  z-index: 3;
+  animation: scan-roll 8s linear infinite;
+}
+
+@keyframes scan-roll { to { background-position: 0 400px; } }
+
+/* Drifting formulae: absolutely positioned KaTeX fragments floating
+   across the viewport behind the content. */
+.drift-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* Kept deliberately faint and small: this is texture behind the page, and at
+   full strength it competed with the copy instead of sitting under it. */
+.drifter {
+  position: absolute;
+  white-space: nowrap;
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: drift-across linear infinite;
+  text-shadow: 0 0 14px currentColor;
+  filter: blur(0.3px);
+}
+
+@keyframes drift-across {
+  0%   { opacity: 0;    transform: translate3d(0, 0, 0) rotate(var(--tilt, 0deg)) scale(var(--sc, 1)); }
+  14%  { opacity: 0.22; }
+  86%  { opacity: 0.22; }
+  100% { opacity: 0;    transform: translate3d(var(--dx, 60vw), var(--dy, -30vh), 0) rotate(calc(var(--tilt, 0deg) * -1)) scale(var(--sc, 1)); }
+}
+
+/* Cursor trail — one pooled element per dot, recycled by JS. */
+#cursor-trail { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
+
+.trail-dot {
+  position: absolute;
+  width: 10px; height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: var(--trail, var(--a));
+  filter: blur(1px);
+  animation: trail-fade 700ms ease-out forwards;
+}
+
+@keyframes trail-fade {
+  from { opacity: 0.9; transform: scale(1.3); }
+  to   { opacity: 0;   transform: scale(0) translateY(14px); }
+}
+
+/* ─────────────────────────── scroll progress ─────────────────────────── */
+
+#scroll-progress {
+  position: fixed; top: 0; left: 0; right: 0;
+  height: 3px; z-index: 60;
+  background: color-mix(in oklab, var(--ink) 10%, transparent);
+}
+
+#scroll-progress i {
+  display: block; height: 100%; width: 0%;
+  background: linear-gradient(90deg, var(--a), var(--c), var(--b), var(--e), var(--f));
+  box-shadow: 0 0 14px var(--a);
+}
+
+/* ──────────────────────────────── topbar ─────────────────────────────── */
+
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; gap: 1.25rem;
+  padding: 0.7rem clamp(1rem, 4vw, 3rem);
+  backdrop-filter: blur(14px) saturate(160%);
+  background: color-mix(in oklab, var(--void) 72%, transparent);
+  border-bottom: var(--border);
+}
+
+.brand {
+  display: inline-flex; align-items: center; gap: 0.6rem;
+  text-decoration: none; color: var(--ink);
+  font-weight: 800; letter-spacing: -0.02em;
+  flex: 0 0 auto;
+}
+
+.brand-glyph { color: var(--c); animation: glyph-breathe 4s ease-in-out infinite; }
+
+@keyframes glyph-breathe {
+  50% { transform: scale(1.18) rotate(-6deg); filter: drop-shadow(0 0 10px var(--c)); }
+}
+
+.brand-word {
+  background: linear-gradient(90deg, var(--a), var(--c), var(--b), var(--a));
+  background-size: 300% 100%;
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent;
+  animation: slide-hue 5s linear infinite;
+  font-size: 1.15rem;
+}
+
+@keyframes slide-hue { to { background-position: 300% 0; } }
+
+.topbar nav {
+  display: flex; gap: 0.25rem 1rem; flex-wrap: wrap;
+  margin-inline: auto;
+  font-family: var(--font-mono); font-size: 0.82rem;
+}
+
+.topbar nav a {
+  position: relative; color: var(--ink); text-decoration: none;
+  opacity: 0.72; padding: 0.2rem 0;
+  transition: opacity 180ms, color 180ms;
+}
+
+.topbar nav a::after {
+  content: ""; position: absolute; left: 0; right: 100%; bottom: -2px; height: 2px;
+  background: var(--c); transition: right 220ms cubic-bezier(.2,.9,.2,1);
+}
+
+.topbar nav a:hover { opacity: 1; color: var(--c); }
+.topbar nav a:hover::after { right: 0; }
+
+.topbar-actions { display: flex; gap: 0.5rem; flex: 0 0 auto; }
+
+/* ──────────────────────────────── buttons ───────────────────────────── */
+
+.btn {
+  font-family: var(--font-mono); font-size: 0.82rem;
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  padding: 0.5rem 0.9rem; border-radius: 999px;
+  border: var(--border); background: transparent; color: var(--ink);
+  cursor: pointer; text-decoration: none;
+  transition: transform 160ms cubic-bezier(.2,.9,.2,1), box-shadow 200ms, background 200ms, color 200ms;
+}
+
+.btn:hover { transform: translateY(-2px) scale(1.03); }
+.btn:active { transform: translateY(0) scale(0.98); }
+.btn:focus-visible { outline: 2px solid var(--c); outline-offset: 3px; }
+
+.btn-ghost:hover { background: color-mix(in oklab, var(--ink) 10%, transparent); box-shadow: 0 0 20px color-mix(in oklab, var(--b) 50%, transparent); }
+
+.btn-loud {
+  border: none; color: var(--void); font-weight: 700;
+  background: linear-gradient(100deg, var(--a), var(--c), var(--e), var(--a));
+  background-size: 300% 100%;
+  animation: slide-hue 4s linear infinite;
+  box-shadow: 0 6px 30px color-mix(in oklab, var(--a) 55%, transparent);
+}
+
+.btn-loud:hover { box-shadow: 0 10px 44px color-mix(in oklab, var(--c) 70%, transparent); }
+
+.btn-wire { border-color: var(--b); color: var(--b); }
+.btn-wire:hover { background: var(--b); color: var(--void); }
+
+#toggle-motion[aria-pressed="true"] { background: var(--f); color: var(--void); border-color: var(--f); }
+
+/* ───────────────────────────────── hero ─────────────────────────────── */
+
+main { position: relative; z-index: 10; }
+
+.hero {
+  position: relative;
+  min-height: 92vh;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 1.4rem;
+  padding: clamp(2rem, 6vw, 5rem) clamp(1rem, 5vw, 4rem) var(--rhythm);
+  text-align: center;
+}
+
+.hero-orbit {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  pointer-events: none;
+}
+
+.orbiter {
+  position: absolute;
+  font-size: clamp(1.2rem, 2.4vw, 2.2rem);
+  opacity: 0.5;
+  animation: orbit 26s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+/* Each orbiter gets a different radius, phase and colour. */
+.orbiter:nth-child(1) { --r: 17vw; animation-delay: 0s;   color: var(--a); }
+.orbiter:nth-child(2) { --r: 24vw; animation-delay: -4s;  color: var(--b); animation-duration: 31s; }
+.orbiter:nth-child(3) { --r: 31vw; animation-delay: -9s;  color: var(--c); animation-duration: 38s; }
+.orbiter:nth-child(4) { --r: 21vw; animation-delay: -14s; color: var(--e); animation-duration: 24s; }
+.orbiter:nth-child(5) { --r: 36vw; animation-delay: -19s; color: var(--f); animation-duration: 44s; }
+.orbiter:nth-child(6) { --r: 28vw; animation-delay: -23s; color: var(--d); animation-duration: 35s; }
+
+@keyframes orbit {
+  from { transform: rotate(0deg) translateX(var(--r)) rotate(0deg); }
+  to   { transform: rotate(360deg) translateX(var(--r)) rotate(-360deg); }
+}
+
+/* Deliberately not inline-flex: a flex `gap` would insert space between every
+   text run, putting a gap before each comma. */
+.eyebrow {
+  display: inline-block;
+  margin: 0; font-family: var(--font-mono); font-size: 0.78rem;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: color-mix(in oklab, var(--ink) 75%, transparent);
+  padding: 0.4rem 0.95rem; border-radius: 999px;
+  border: var(--border);
+  background: color-mix(in oklab, var(--void) 55%, transparent);
+}
+
+.eyebrow .dot {
+  display: inline-block; vertical-align: middle; margin-right: 0.5rem;
+  width: 8px; height: 8px; border-radius: 50%; background: var(--e);
+  box-shadow: 0 0 0 0 var(--e);
+  animation: ping 1.8s ease-out infinite;
+}
+
+@keyframes ping {
+  to { box-shadow: 0 0 0 12px transparent; }
+}
+
+.hero-title {
+  margin: 0;
+  font-size: clamp(3rem, 14vw, 11rem);
+  line-height: 0.88;
+  font-weight: 900;
+  letter-spacing: -0.045em;
+}
+
+/* Glitch: two offset copies in complementary accents, clipped on a stutter. */
+.glitch {
+  position: relative; display: inline-block;
+  background: linear-gradient(92deg, var(--a), var(--c) 35%, var(--b) 68%, var(--e));
+  background-size: 220% 100%;
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent;
+  animation: slide-hue 7s linear infinite;
+}
+
+.glitch::before,
+.glitch::after {
+  content: attr(data-text);
+  position: absolute; inset: 0;
+  background: inherit; -webkit-background-clip: text; background-clip: text;
+  color: transparent;
+}
+
+.glitch::before {
+  text-shadow: 0.06em 0 var(--a);
+  animation: glitch-a 3.4s steps(2, end) infinite;
+  clip-path: polygon(0 2%, 100% 2%, 100% 38%, 0 38%);
+}
+
+.glitch::after {
+  text-shadow: -0.06em 0 var(--b);
+  animation: glitch-b 2.7s steps(2, end) infinite;
+  clip-path: polygon(0 60%, 100% 60%, 100% 98%, 0 98%);
+}
+
+@keyframes glitch-a {
+  0%, 82%, 100% { transform: translate3d(0, 0, 0); }
+  84% { transform: translate3d(-0.05em, 0.015em, 0); }
+  88% { transform: translate3d(0.045em, -0.02em, 0); }
+  92% { transform: translate3d(-0.03em, 0, 0); }
+}
+
+@keyframes glitch-b {
+  0%, 78%, 100% { transform: translate3d(0, 0, 0); }
+  80% { transform: translate3d(0.05em, -0.012em, 0); }
+  86% { transform: translate3d(-0.04em, 0.022em, 0); }
+  90% { transform: translate3d(0.02em, 0, 0); }
+}
+
+.hero-equation { font-size: clamp(1.6rem, 4.6vw, 3.4rem); margin: 0.4rem 0 0; }
+
+/* Chromatic aberration on a maths display: three colour-split copies. */
+.chroma-split { position: relative; animation: chroma-pulse 5s ease-in-out infinite; }
+
+@keyframes chroma-pulse {
+  0%, 100% { filter: drop-shadow(2px 0 0 var(--a)) drop-shadow(-2px 0 0 var(--b)); }
+  50%      { filter: drop-shadow(-5px 0 0 var(--c)) drop-shadow(5px 0 0 var(--d)); }
+}
+
+.hero-sub {
+  max-width: 62ch; margin: 0;
+  color: color-mix(in oklab, var(--ink) 86%, transparent);
+  font-size: 1.05rem;
+}
+
+.hero-sub strong { color: var(--c); }
+
+.hero-cta { display: flex; gap: 0.8rem; flex-wrap: wrap; justify-content: center; }
+
+.stat-row {
+  display: flex; gap: 0.75rem; flex-wrap: wrap; justify-content: center;
+  margin-top: 0.8rem;
+}
+
+.stat {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.55rem 1rem; border-radius: 999px;
+  border: var(--border);
+  background: color-mix(in oklab, var(--void) 50%, transparent);
+  font-family: var(--font-mono); font-size: 0.74rem;
+  color: color-mix(in oklab, var(--ink) 72%, transparent);
+}
+
+.stat b { color: var(--c); font-size: 1rem; }
+
+.scroll-hint {
+  margin-top: 1.5rem; font-size: 1.5rem; color: var(--b);
+  animation: bob 1.8s ease-in-out infinite;
+}
+
+@keyframes bob {
+  50% { transform: translateY(12px); opacity: 0.4; }
+}
+
+/* ─────────────────────────────── marquee ────────────────────────────── */
+
+.marquee {
+  position: relative;
+  overflow: hidden;
+  padding: 0.9rem 0;
+  border-block: var(--border);
+  background: color-mix(in oklab, var(--d) 22%, var(--void));
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+
+.marquee-track {
+  display: flex; gap: 3rem; width: max-content;
+  animation: marquee-scroll 42s linear infinite;
+}
+
+.marquee-track span {
+  font-size: 1.1rem;
+  color: color-mix(in oklab, var(--ink) 88%, transparent);
+  white-space: nowrap;
+}
+
+.marquee-track span:nth-child(3n)   { color: var(--c); }
+.marquee-track span:nth-child(3n+1) { color: var(--b); }
+
+@keyframes marquee-scroll {
+  /* The track holds the fragment list twice, so -50% is a seamless loop. */
+  to { transform: translateX(-50%); }
+}
+
+/* ──────────────────────────────── panels ────────────────────────────── */
+
+.panel {
+  max-width: 1180px;
+  margin-inline: auto;
+  padding: var(--rhythm) clamp(1rem, 5vw, 3rem);
+  scroll-margin-top: 5rem;
+}
+
+.reveal {
+  opacity: 0;
+  transform: translateY(42px) scale(0.985);
+  transition: opacity 760ms cubic-bezier(.2,.9,.2,1), transform 760ms cubic-bezier(.2,.9,.2,1);
+}
+
+.reveal.in { opacity: 1; transform: none; }
+
+.panel-head { max-width: 72ch; margin-bottom: 2.2rem; }
+
+.panel-num {
+  display: inline-block; margin-bottom: 0.6rem;
+  font-size: 0.9rem; color: var(--f);
+  padding: 0.25rem 0.7rem; border-radius: 999px;
+  border: 1px solid var(--f);
+}
+
+.panel-head h2 {
+  margin: 0 0 0.7rem;
+  font-size: clamp(1.8rem, 4.4vw, 3.1rem);
+  line-height: 1.04; letter-spacing: -0.03em; font-weight: 850;
+  background: linear-gradient(96deg, var(--ink), var(--c) 60%, var(--a));
+  background-size: 200% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: slide-hue 9s linear infinite alternate;
+}
+
+.panel-head p {
+  margin: 0;
+  color: color-mix(in oklab, var(--ink) 80%, transparent);
+}
+
+.panel-head strong { color: var(--b); }
+
+.panel-head code,
+.mono { font-family: var(--font-mono); font-size: 0.9em; color: var(--e); }
+
+/* ─────────────────────────────── controls ───────────────────────────── */
+
+.control-row {
+  display: flex; align-items: center; gap: 1.2rem 1.6rem;
+  flex-wrap: wrap; margin-bottom: 1.6rem;
+}
+
+.control-row.centered { justify-content: center; }
+
+.chip-set { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+.chip {
+  font-family: var(--font-mono); font-size: 0.8rem;
+  padding: 0.4rem 0.85rem; border-radius: 999px;
+  border: var(--border); background: color-mix(in oklab, var(--void) 45%, transparent);
+  color: var(--ink); cursor: pointer;
+  transition: transform 150ms cubic-bezier(.2,.9,.2,1), background 200ms, color 200ms, box-shadow 200ms, border-color 200ms;
+}
+
+.chip:hover { transform: translateY(-3px) rotate(-1.5deg); border-color: var(--c); }
+.chip:focus-visible { outline: 2px solid var(--c); outline-offset: 2px; }
+
+.chip[aria-pressed="true"] {
+  background: var(--c); color: var(--void); border-color: transparent;
+  box-shadow: 0 6px 26px color-mix(in oklab, var(--c) 60%, transparent);
+  transform: translateY(-2px) scale(1.05);
+}
+
+.slider { display: flex; flex-direction: column; gap: 0.35rem; min-width: 210px; }
+
+.slider span {
+  font-family: var(--font-mono); font-size: 0.74rem; letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--ink) 70%, transparent);
+}
+
+.slider output { color: var(--c); font-weight: 700; }
+
+input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  height: 6px; border-radius: 999px; background: color-mix(in oklab, var(--ink) 16%, transparent);
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--a); border: 3px solid var(--void);
+  box-shadow: 0 0 16px var(--a);
+  transition: transform 140ms;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.25); }
+
+input[type="range"]::-moz-range-thumb {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--a); border: 3px solid var(--void);
+  box-shadow: 0 0 16px var(--a);
+}
+
+input[type="range"]:focus-visible { outline: 2px solid var(--c); outline-offset: 4px; }
+
+/* ────────────────────────────── result cards ────────────────────────── */
+
+.result-card {
+  position: relative;
+  padding: clamp(1.2rem, 3vw, 2.1rem);
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--void) 82%, transparent);
+  border: var(--border);
+  backdrop-filter: blur(8px);
+  overflow: hidden;
+  transition: transform 260ms cubic-bezier(.2,.9,.2,1), box-shadow 260ms;
+}
+
+/* A conic gradient that rotates around the card border. The double mask
+   punches out the interior so only a 2px rim shows — painting the gradient
+   across the whole card would wreck the contrast of the maths on top. */
+.result-card::before {
+  content: "";
+  position: absolute; inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  padding: 2px;
+  background: conic-gradient(from var(--spin), var(--a), var(--c), var(--b), var(--e), var(--d), var(--a));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  animation: ring-spin 7s linear infinite;
+  opacity: 0.75;
+}
+
+@keyframes ring-spin { to { --spin: 360deg; } }
+
+/* Without mask-composite the rim trick would fill the card, so fall back to
+   a plain animated border instead. */
+@supports not ((mask-composite: exclude) or (-webkit-mask-composite: xor)) {
+  .result-card::before { display: none; }
+  .result-card { border-color: color-mix(in oklab, var(--c) 55%, transparent); }
+}
+
+.result-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 22px 60px color-mix(in oklab, var(--a) 28%, transparent);
+}
+
+.result-card.wide { grid-column: 1 / -1; }
+
+.result-label {
+  font-family: var(--font-mono); font-size: 0.72rem;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: color-mix(in oklab, var(--ink) 62%, transparent);
+  margin-bottom: 0.9rem;
+}
+
+.result-label b { color: var(--c); text-transform: none; letter-spacing: 0; font-size: 0.95rem; }
+
+/* A note line: monospace id chip, then typeset LaTeX at normal case. */
+.note-line { display: inline-flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; text-transform: none; }
+
+/* Ink on a tinted ground, not accent-on-accent: some generated palettes have
+   a dark `--b`, and accent text on an accent wash disappears. */
+.note-tag {
+  font-family: var(--font-mono); font-size: 0.7rem;
+  padding: 0.1rem 0.5rem; border-radius: 999px;
+  background: color-mix(in oklab, var(--b) 35%, transparent);
+  border: 1px solid color-mix(in oklab, var(--b) 55%, transparent);
+  color: var(--ink); letter-spacing: 0.08em;
+}
+
+.note-line .katex { font-size: 1.02em; color: color-mix(in oklab, var(--ink) 88%, transparent); }
+
+.result-tex { overflow-x: auto; overflow-y: hidden; padding-block: 0.3rem; }
+.result-tex.small { font-size: 0.86em; opacity: 0.9; }
+
+/* Thin accented scrollbars on the overflowing maths. */
+.result-tex::-webkit-scrollbar { height: 6px; }
+.result-tex::-webkit-scrollbar-thumb { background: var(--b); border-radius: 999px; }
+.result-tex::-webkit-scrollbar-track { background: transparent; }
+
+/* Freshly typeset maths pops in. JS re-adds the class to replay it. */
+.tex-pop { animation: tex-pop 620ms cubic-bezier(.2,1.3,.3,1); }
+
+@keyframes tex-pop {
+  0%   { opacity: 0; transform: translateY(14px) scale(0.9) rotate(-1deg); filter: blur(6px); }
+  60%  { opacity: 1; filter: blur(0); }
+  100% { transform: none; }
+}
+
+.endpoint {
+  display: block; margin-top: 1.1rem;
+  font-family: var(--font-mono); font-size: 0.72rem;
+  color: var(--e); opacity: 0.8;
+  word-break: break-all;
+}
+
+.endpoint::before { content: "GET "; color: var(--f); }
+
+/* Tilt cards lean on hover in 3D. */
+.tilt { transform-style: preserve-3d; }
+.tilt:hover { transform: translateY(-6px) rotateX(4deg) rotateY(-5deg); }
+
+.pulse { animation: card-pulse 3.6s ease-in-out infinite; }
+
+@keyframes card-pulse {
+  50% { box-shadow: 0 0 0 4px color-mix(in oklab, var(--e) 35%, transparent); }
+}
+
+/* ────────────────────────── coefficient strip ───────────────────────── */
+
+.coeff-strip {
+  display: flex; gap: 0.5rem; flex-wrap: wrap;
+  margin-top: 1.3rem;
+}
+
+.coeff {
+  display: flex; flex-direction: column; align-items: center; gap: 0.2rem;
+  min-width: 62px; padding: 0.5rem 0.6rem;
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--ink) 7%, transparent);
+  border: 1px solid color-mix(in oklab, var(--ink) 12%, transparent);
+  animation: coeff-in 480ms backwards cubic-bezier(.2,1.2,.3,1);
+}
+
+@keyframes coeff-in {
+  from { opacity: 0; transform: translateY(18px) scale(0.8); }
+}
+
+.coeff.zero { opacity: 0.32; }
+.coeff .k { font-family: var(--font-mono); font-size: 0.64rem; color: var(--f); }
+.coeff .v { font-size: 0.95rem; }
+
+/* ───────────────────────────── layout grids ───────────────────────── */
+
+.matrix-grid {
+  display: grid; gap: 1.1rem;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  perspective: 1200px;
+}
+
+.cfrac-grid {
+  display: grid; gap: 1.1rem;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+}
+
+@media (max-width: 860px) {
+  .cfrac-grid { grid-template-columns: 1fr; }
+}
+
+.side-stack { display: grid; gap: 1.1rem; align-content: start; }
+
+.tower { display: flex; flex-direction: column; justify-content: center; }
+.tower .result-tex { font-size: clamp(0.9rem, 1.6vw, 1.15rem); }
+
+.palette-row { display: grid; gap: 1.1rem; }
+
+/* ───────────────────────────── theorem wall ───────────────────────── */
+
+.theorem-wall {
+  display: grid; gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+}
+
+.theorem {
+  position: relative;
+  padding: 1.3rem 1.4rem;
+  border-radius: var(--radius);
+  border: var(--border);
+  background: color-mix(in oklab, var(--void) 76%, transparent);
+  overflow: hidden;
+  opacity: 0; transform: translateY(26px);
+  transition: transform 300ms cubic-bezier(.2,.9,.2,1), box-shadow 300ms, border-color 300ms;
+}
+
+.theorem.in { animation: theorem-in 620ms forwards cubic-bezier(.2,.9,.2,1); }
+
+@keyframes theorem-in {
+  to { opacity: 1; transform: none; }
+}
+
+.theorem::after {
+  /* A sweep of light that crosses the card on hover. */
+  content: "";
+  position: absolute; inset: 0;
+  background: linear-gradient(105deg, transparent 30%, color-mix(in oklab, var(--ink) 22%, transparent) 50%, transparent 70%);
+  transform: translateX(-120%);
+  transition: transform 700ms cubic-bezier(.2,.9,.2,1);
+  pointer-events: none;
+}
+
+.theorem:hover {
+  transform: translateY(-8px) scale(1.02);
+  border-color: var(--c);
+  box-shadow: 0 20px 50px color-mix(in oklab, var(--d) 40%, transparent);
+  z-index: 2;
+}
+
+.theorem:hover::after { transform: translateX(120%); }
+
+.theorem h3 {
+  margin: 0 0 0.2rem; font-size: 0.95rem; letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.theorem .tag {
+  display: inline-block; margin-bottom: 0.9rem;
+  font-family: var(--font-mono); font-size: 0.64rem;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--b);
+}
+
+/* A few corpus entries (the zeta functional equation, Ramanujan's series) are
+   wider than any card. Display maths cannot reflow, so shrink it slightly and
+   let the rest scroll on a styled bar rather than the browser's default. */
+.theorem .math {
+  overflow-x: auto;
+  color: color-mix(in oklab, var(--ink) 94%, transparent);
+  font-size: 0.92em;
+  padding-bottom: 0.35rem;
+}
+
+.theorem .math::-webkit-scrollbar { height: 5px; }
+.theorem .math::-webkit-scrollbar-thumb { background: var(--c); border-radius: 999px; }
+.theorem .math::-webkit-scrollbar-track { background: transparent; }
+.theorem:nth-child(4n+1):hover { border-color: var(--a); }
+.theorem:nth-child(4n+2):hover { border-color: var(--e); }
+.theorem:nth-child(4n+3):hover { border-color: var(--b); }
+
+/* ─────────────────────────────── swatches ───────────────────────────── */
+
+.swatches { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 1.4rem; }
+
+.swatch {
+  flex: 1 1 96px;
+  min-width: 96px;
+  border-radius: 14px;
+  padding: 0.7rem 0.75rem;
+  display: flex; flex-direction: column; gap: 0.2rem;
+  font-family: var(--font-mono); font-size: 0.68rem;
+  border: 1px solid color-mix(in oklab, var(--ink) 20%, transparent);
+  animation: swatch-in 520ms backwards cubic-bezier(.2,1.2,.3,1);
+  transition: transform 220ms cubic-bezier(.2,.9,.2,1);
+}
+
+.swatch:hover { transform: translateY(-6px) rotate(-2deg) scale(1.06); }
+
+@keyframes swatch-in {
+  from { opacity: 0; transform: translateY(24px) rotate(6deg); }
+}
+
+.swatch .role { font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.swatch .hex { opacity: 0.85; }
+
+/* ────────────────────────────── api table ───────────────────────────── */
+
+.api-table { display: grid; gap: 0.6rem; }
+
+.api-row {
+  display: grid;
+  grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
+  gap: 0.4rem 1.4rem;
+  align-items: baseline;
+  padding: 0.85rem 1.1rem;
+  border-radius: 12px;
+  border: var(--border);
+  background: color-mix(in oklab, var(--void) 70%, transparent);
+  transition: transform 180ms cubic-bezier(.2,.9,.2,1), border-color 180ms, background 180ms;
+}
+
+.api-row:hover {
+  transform: translateX(10px);
+  border-color: var(--e);
+  background: color-mix(in oklab, var(--e) 12%, var(--void));
+}
+
+.api-row .route { font-family: var(--font-mono); font-size: 0.8rem; color: var(--c); }
+.api-row .route em { color: var(--f); font-style: normal; }
+.api-row .what { font-size: 0.88rem; color: color-mix(in oklab, var(--ink) 80%, transparent); }
+
+@media (max-width: 720px) {
+  .api-row { grid-template-columns: 1fr; }
+}
+
+/* ──────────────────────────────── footer ────────────────────────────── */
+
+footer {
+  position: relative; z-index: 10;
+  text-align: center;
+  padding: var(--rhythm) 1.5rem 4rem;
+  border-top: var(--border);
+  font-family: var(--font-mono); font-size: 0.76rem;
+  color: color-mix(in oklab, var(--ink) 60%, transparent);
+}
+
+footer .tex-display { font-size: 1.6rem; color: var(--a); animation: glyph-breathe 3s ease-in-out infinite; }
+
+/* ───────────────────────────── KaTeX tuning ────────────────────────── */
+
+.katex { color: inherit; }
+.tex-display .katex-display { margin: 0.3em 0; }
+.tex-display { color: var(--ink); }
+
+/* KaTeX renders \text in its own font; keep it legible against the wash. */
+.katex .mord.text { color: inherit; }
+
+/* Error state if a fragment fails to typeset — visible, not silent. */
+.tex-error {
+  font-family: var(--font-mono); font-size: 0.8rem;
+  color: var(--f); border: 1px dashed var(--f);
+  padding: 0.3rem 0.5rem; border-radius: 6px;
+}

@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chromatex — a maximalist LaTeX machine</title>
+<meta name="description" content="Exact power series, Bareiss determinants and continued fractions computed in Rust, typeset as LaTeX, and animated to excess.">
+<link rel="stylesheet" href="/vendor/katex.min.css">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><text y='48' font-size='48' font-family='serif'>%E2%88%AB</text></svg>">
+</head>
+<body>
+
+<!-- Background layers: gradient wash, canvas lattice, drifting formulae -->
+<div class="bg-wash" aria-hidden="true"></div>
+<div class="bg-grid" aria-hidden="true"></div>
+<canvas id="lattice" aria-hidden="true"></canvas>
+<div id="drift" class="drift-layer" aria-hidden="true"></div>
+<div class="scanlines" aria-hidden="true"></div>
+<div id="cursor-trail" aria-hidden="true"></div>
+
+<div id="scroll-progress" aria-hidden="true"><i></i></div>
+
+<header class="topbar">
+  <a class="brand" href="#top">
+    <span class="brand-glyph tex" data-tex="\int\!\!\!\int_{\mathbb{C}}"></span>
+    <span class="brand-word">chromatex</span>
+  </a>
+  <nav>
+    <a href="#series">series</a>
+    <a href="#matrix">matrices</a>
+    <a href="#cfrac">fractions</a>
+    <a href="#theorems">theorems</a>
+    <a href="#palette">palette</a>
+  </nav>
+  <div class="topbar-actions">
+    <button id="shuffle-palette" class="btn btn-ghost" title="Ask the Rust backend for a new colour scheme">
+      <span class="tex" data-tex="\Phi"></span> recolour
+    </button>
+    <button id="toggle-motion" class="btn btn-ghost" aria-pressed="false" title="Stop all animation">
+      <span class="tex" data-tex="\partial_t = 0"></span>
+    </button>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ─────────────────────────────── HERO ─────────────────────────────── -->
+  <section class="hero">
+    <div class="hero-orbit" aria-hidden="true">
+      <span class="orbiter tex" data-tex="\aleph_1"></span>
+      <span class="orbiter tex" data-tex="\nabla^2"></span>
+      <span class="orbiter tex" data-tex="\oint"></span>
+      <span class="orbiter tex" data-tex="\hbar"></span>
+      <span class="orbiter tex" data-tex="\otimes"></span>
+      <span class="orbiter tex" data-tex="\zeta(s)"></span>
+    </div>
+
+    <p class="eyebrow">
+      <span class="dot"></span>
+      exact arithmetic in <span class="mono">rust</span>, typeset in <span class="mono">LaTeX</span>, animated without restraint
+    </p>
+
+    <h1 class="hero-title">
+      <span class="glitch" data-text="chromatex">chromatex</span>
+    </h1>
+
+    <div class="hero-equation tex-display chroma-split" data-tex="e^{i\pi} + 1 = 0"></div>
+
+    <p class="hero-sub">
+      Every formula below is <strong>LaTeX</strong>. Every formula that is not a quotation is
+      <strong>computed in Rust</strong> — exact rational power series, fraction-free determinants,
+      continued-fraction expansions — and shipped to your browser as LaTeX source.
+      Nothing here is a screenshot.
+    </p>
+
+    <div class="hero-cta">
+      <a class="btn btn-loud" href="#series">
+        expand something <span class="tex" data-tex="\sum_{n=0}^{\infty}"></span>
+      </a>
+      <a class="btn btn-wire" href="#api">read the API</a>
+    </div>
+
+    <div class="stat-row">
+      <div class="stat"><b class="tex" data-tex="\mathbb{Q}"></b><span>exact rationals, no floats</span></div>
+      <div class="stat"><b class="tex" data-tex="\varnothing"></b><span>zero backend crates</span></div>
+      <div class="stat"><b class="tex" data-tex="137.5^\circ"></b><span>golden-angle hue walk</span></div>
+    </div>
+
+    <div class="scroll-hint" aria-hidden="true">
+      <span class="tex" data-tex="\downarrow"></span>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────── MARQUEE ───────────────────────────── -->
+  <div class="marquee" aria-hidden="true">
+    <div class="marquee-track" id="marquee-a"></div>
+  </div>
+
+  <!-- ────────────────────────────── SERIES ──────────────────────────── -->
+  <section id="series" class="panel reveal">
+    <div class="panel-head">
+      <span class="panel-num tex" data-tex="\S 1"></span>
+      <h2>Taylor expansions, exactly</h2>
+      <p>
+        The backend holds truncated power series over <span class="tex" data-tex="\mathbb{Q}"></span>
+        and does real arithmetic on them. <span class="tex" data-tex="\tan x"></span> is not a table of
+        Bernoulli numbers — it is <span class="tex" data-tex="\sin x / \cos x"></span> evaluated by
+        series division, every coefficient an exact fraction.
+      </p>
+    </div>
+
+    <div class="control-row">
+      <div class="chip-set" id="series-chips" role="group" aria-label="Function to expand"></div>
+      <label class="slider">
+        <span>terms <output id="series-terms-out">8</output></span>
+        <input type="range" id="series-terms" min="2" max="18" value="8">
+      </label>
+    </div>
+
+    <div class="result-card" id="series-card">
+      <div class="result-label">
+        <span id="series-note" class="note-line"></span>
+      </div>
+      <div class="result-tex tex-display" id="series-display"></div>
+      <div class="coeff-strip" id="series-coeffs"></div>
+      <code class="endpoint" id="series-endpoint"></code>
+    </div>
+  </section>
+
+  <!-- ────────────────────────────── MATRIX ──────────────────────────── -->
+  <section id="matrix" class="panel reveal">
+    <div class="panel-head">
+      <span class="panel-num tex" data-tex="\S 2"></span>
+      <h2>Determinants without rounding</h2>
+      <p>
+        Integer matrices from a seeded generator, reduced by
+        <strong>Bareiss elimination</strong> — fraction-free, so the determinant stays in
+        <span class="tex" data-tex="\mathbb{Z}"></span> from start to finish. The characteristic
+        polynomial comes from Faddeev–LeVerrier.
+      </p>
+    </div>
+
+    <div class="control-row">
+      <label class="slider">
+        <span>dimension <output id="matrix-dim-out">4</output></span>
+        <input type="range" id="matrix-dim" min="2" max="6" value="4">
+      </label>
+      <button class="btn btn-loud" id="matrix-reroll">
+        reroll <span class="tex" data-tex="A"></span>
+      </button>
+    </div>
+
+    <div class="matrix-grid">
+      <div class="result-card tilt">
+        <div class="result-label">the matrix</div>
+        <div class="result-tex tex-display" id="matrix-pmatrix"></div>
+      </div>
+      <div class="result-card tilt">
+        <div class="result-label">determinant, exact</div>
+        <div class="result-tex tex-display" id="matrix-det"></div>
+        <div class="result-tex tex-display small" id="matrix-trace"></div>
+      </div>
+      <div class="result-card tilt wide">
+        <div class="result-label">characteristic polynomial</div>
+        <div class="result-tex tex-display" id="matrix-charpoly"></div>
+        <code class="endpoint" id="matrix-endpoint"></code>
+      </div>
+    </div>
+  </section>
+
+  <!-- ────────────────────────────── CFRAC ───────────────────────────── -->
+  <section id="cfrac" class="panel reveal">
+    <div class="panel-head">
+      <span class="panel-num tex" data-tex="\S 3"></span>
+      <h2>Continued fractions, all the way down</h2>
+      <p>
+        The Euclidean algorithm run on a real number, rendered as a tower of
+        <span class="mono">\cfrac</span>. The convergents are the best rational approximations
+        that exist at their denominator — which is why
+        <span class="tex" data-tex="355/113"></span> is so famous.
+      </p>
+    </div>
+
+    <div class="control-row">
+      <div class="chip-set" id="cfrac-chips" role="group" aria-label="Constant to expand"></div>
+      <label class="slider">
+        <span>depth <output id="cfrac-depth-out">6</output></span>
+        <input type="range" id="cfrac-depth" min="2" max="10" value="6">
+      </label>
+    </div>
+
+    <div class="cfrac-grid">
+      <div class="result-card tower">
+        <div class="result-label" id="cfrac-blurb"></div>
+        <div class="result-tex tex-display" id="cfrac-tower"></div>
+      </div>
+      <div class="side-stack">
+        <div class="result-card">
+          <div class="result-label">bracket notation</div>
+          <div class="result-tex tex-display" id="cfrac-bracket"></div>
+        </div>
+        <div class="result-card">
+          <div class="result-label">convergents &amp; error</div>
+          <div class="result-tex tex-display small" id="cfrac-convergents"></div>
+        </div>
+        <div class="result-card pulse">
+          <div class="result-label">best approximation found</div>
+          <div class="result-tex tex-display" id="cfrac-best"></div>
+          <code class="endpoint" id="cfrac-endpoint"></code>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────── THEOREMS ─────────────────────────── -->
+  <section id="theorems" class="panel reveal">
+    <div class="panel-head">
+      <span class="panel-num tex" data-tex="\S 4"></span>
+      <h2>A wall of consequences</h2>
+      <p>
+        Served from a corpus in the Rust binary. Hover one. Every card is live LaTeX, not an image —
+        select the text if you doubt it.
+      </p>
+    </div>
+    <div class="theorem-wall" id="theorem-wall"></div>
+  </section>
+
+  <!-- ────────────────────────────── PALETTE ─────────────────────────── -->
+  <section id="palette" class="panel reveal">
+    <div class="panel-head">
+      <span class="panel-num tex" data-tex="\S 5"></span>
+      <h2>The colour scheme is also a function</h2>
+      <p>
+        Hues advance by the golden angle <span class="tex" data-tex="137.508^\circ"></span> from a
+        seeded base, at full chroma, alternating luminance. Deliberately clashing: a design system
+        would never, which is the point.
+      </p>
+    </div>
+
+    <div class="palette-row">
+      <div class="result-card wide">
+        <div class="result-label">scheme <b id="palette-name"></b></div>
+        <div class="swatches" id="swatches"></div>
+        <div class="result-tex tex-display small" id="palette-latex"></div>
+        <code class="endpoint" id="palette-endpoint"></code>
+      </div>
+    </div>
+    <div class="control-row centered">
+      <button class="btn btn-loud" id="palette-reroll">
+        resample <span class="tex" data-tex="\Phi_{\text{seed}}"></span>
+      </button>
+    </div>
+  </section>
+
+  <!-- ──────────────────────────────── API ──────────────────────────── -->
+  <section id="api" class="panel reveal">
+    <div class="panel-head">
+      <span class="panel-num tex" data-tex="\S 6"></span>
+      <h2>The backend</h2>
+      <p>
+        Rust, <code>std</code> only — no crates, no async runtime, no framework. A blocking
+        HTTP/1.1 server on a fixed worker pool. Every endpoint returns LaTeX source.
+      </p>
+    </div>
+    <div class="api-table" id="api-table"></div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="tex-display" data-tex="\blacksquare"></div>
+  <p>
+    chromatex — rust <span class="mono">std</span> backend · KaTeX typesetting, served locally ·
+    <span class="tex" data-tex="\mathcal{Q.E.D.}"></span>
+  </p>
+</footer>
+
+<script defer src="/vendor/katex.min.js"></script>
+<script defer src="/app.js"></script>
+</body>
+</html>

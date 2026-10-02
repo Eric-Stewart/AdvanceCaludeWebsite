@@ -1,0 +1,622 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   chromatex front end
+
+   Rules of the house:
+     · Nothing is typeset by hand — every formula goes through KaTeX.
+     · Nothing is computed here that the Rust backend can compute exactly.
+     · Every animation respects the motion toggle and prefers-reduced-motion.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+'use strict';
+
+const $  = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+let motionOff = prefersReducedMotion.matches;
+
+/* ───────────────────────────── LaTeX plumbing ───────────────────────── */
+
+/** Typeset `tex` into `el`. Failures are shown, not swallowed. */
+function renderTex(el, tex, { display = false, pop = false } = {}) {
+  if (!el) return;
+  if (typeof katex === 'undefined') {
+    el.textContent = tex;
+    return;
+  }
+  try {
+    katex.render(tex, el, {
+      displayMode: display,
+      throwOnError: true,
+      strict: false,
+      trust: false,
+      output: 'htmlAndMathml',
+    });
+  } catch (err) {
+    el.innerHTML = '';
+    const warn = document.createElement('span');
+    warn.className = 'tex-error';
+    warn.textContent = `LaTeX error: ${err.message}`;
+    el.appendChild(warn);
+    console.warn('KaTeX failed on:', tex, err);
+    return;
+  }
+  if (pop && !motionOff) {
+    // Removing and re-adding on the next frame restarts the animation.
+    el.classList.remove('tex-pop');
+    requestAnimationFrame(() => el.classList.add('tex-pop'));
+  }
+}
+
+/** Typeset every `[data-tex]` element that has not been done yet. */
+function renderStaticTex(root = document) {
+  $$('[data-tex]', root).forEach((el) => {
+    if (el.dataset.texDone === '1') return;
+    renderTex(el, el.dataset.tex, { display: el.classList.contains('tex-display') });
+    el.dataset.texDone = '1';
+  });
+}
+
+/**
+ * A monospace label followed by typeset LaTeX. The backend sends its notes as
+ * complete LaTeX (prose wrapped in `\text{}`), so they go straight to KaTeX.
+ */
+function renderLabelledNote(el, label, tex) {
+  if (!el) return;
+  el.innerHTML = '';
+  el.classList.add('note-line'); // cancels the uppercasing of .result-label
+  if (label) {
+    const tag = document.createElement('span');
+    tag.className = 'note-tag';
+    tag.textContent = label;
+    el.appendChild(tag);
+  }
+  const math = document.createElement('span');
+  renderTex(math, tex, { display: false });
+  el.appendChild(math);
+}
+
+/* ──────────────────────────────── fetching ──────────────────────────── */
+
+async function api(path) {
+  const res = await fetch(path, { headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.ok === false) throw new Error(`${path} → ${data.error}`);
+  return data;
+}
+
+/** Show a failure in the card itself rather than only in the console. */
+function showError(el, err) {
+  if (!el) return;
+  el.innerHTML = '';
+  const warn = document.createElement('span');
+  warn.className = 'tex-error';
+  warn.textContent = String(err.message || err);
+  el.appendChild(warn);
+}
+
+const setEndpoint = (el, path) => { if (el) el.textContent = path; };
+
+/* ──────────────────────────────── palette ──────────────────────────── */
+
+const PALETTE_ROLES = { void: '--void', ink: '--ink', a: '--a', b: '--b', c: '--c', d: '--d', e: '--e', f: '--f' };
+
+function applyPalette(palette) {
+  const root = document.documentElement;
+  palette.stops.forEach((stop) => {
+    const prop = PALETTE_ROLES[stop.role];
+    if (prop) root.style.setProperty(prop, stop.hex);
+  });
+
+  const nameEl = $('#palette-name');
+  if (nameEl) nameEl.textContent = `“${palette.name}” · seed ${palette.seed}`;
+
+  const swatches = $('#swatches');
+  if (swatches) {
+    swatches.innerHTML = '';
+    palette.stops.forEach((stop, i) => {
+      const div = document.createElement('div');
+      div.className = 'swatch';
+      div.style.background = stop.hex;
+      // Pick readable text for each swatch from its own lightness.
+      div.style.color = stop.l > 0.5 ? '#07000c' : '#fdf7ff';
+      div.style.animationDelay = `${i * 55}ms`;
+      div.innerHTML = `<span class="role"></span><span class="hex"></span><span class="hsl"></span>`;
+      $('.role', div).textContent = stop.role;
+      $('.hex', div).textContent = stop.hex;
+      $('.hsl', div).textContent = `${Math.round(stop.h)}° ${Math.round(stop.s * 100)}% ${Math.round(stop.l * 100)}%`;
+      swatches.appendChild(div);
+    });
+  }
+
+  renderTex($('#palette-latex'), palette.latex, { display: true, pop: true });
+  setEndpoint($('#palette-endpoint'), `/api/palette?seed=${palette.seed}`);
+  lattice.recolour();
+}
+
+async function rerollPalette(seed) {
+  const s = seed ?? Math.floor(Math.random() * 1e6);
+  try {
+    applyPalette(await api(`/api/palette?seed=${s}`));
+  } catch (err) {
+    showError($('#palette-latex'), err);
+  }
+}
+
+/* ───────────────────────────── canvas lattice ───────────────────────────
+   A drifting point cloud with edges drawn between near neighbours. Colours
+   are sampled from the live palette so it recolours with everything else. */
+
+const lattice = (() => {
+  const canvas = $('#lattice');
+  const ctx = canvas?.getContext('2d');
+  let nodes = [];
+  let colours = ['#ff2fb0', '#16d6c8', '#ffd93d'];
+  let w = 0, h = 0, dpr = 1;
+  let raf = null;
+
+  function readColours() {
+    const cs = getComputedStyle(document.documentElement);
+    colours = ['--a', '--b', '--c', '--e', '--f']
+      .map((p) => cs.getPropertyValue(p).trim())
+      .filter(Boolean);
+  }
+
+  function resize() {
+    if (!canvas) return;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    w = window.innerWidth;
+    h = window.innerHeight;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // Scale the node count to the viewport, with a hard ceiling: the edge
+    // pass is O(n²), so an ultrawide monitor must not melt the main thread.
+    const target = Math.min(90, Math.round((w * h) / 24000));
+    nodes = Array.from({ length: target }, () => ({
+      x: Math.random() * w,
+      y: Math.random() * h,
+      vx: (Math.random() - 0.5) * 0.28,
+      vy: (Math.random() - 0.5) * 0.28,
+      r: 1 + Math.random() * 2.2,
+      c: Math.floor(Math.random() * 5),
+    }));
+  }
+
+  function frame() {
+    if (!ctx) return;
+    ctx.clearRect(0, 0, w, h);
+
+    for (const n of nodes) {
+      n.x += n.vx;
+      n.y += n.vy;
+      if (n.x < 0 || n.x > w) n.vx *= -1;
+      if (n.y < 0 || n.y > h) n.vy *= -1;
+    }
+
+    ctx.lineWidth = 0.7;
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 > 148 * 148) continue;
+        ctx.globalAlpha = (1 - Math.sqrt(d2) / 148) * 0.33;
+        ctx.strokeStyle = colours[a.c % colours.length] || '#fff';
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+    }
+
+    ctx.globalAlpha = 0.85;
+    for (const n of nodes) {
+      ctx.fillStyle = colours[n.c % colours.length] || '#fff';
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    raf = requestAnimationFrame(frame);
+  }
+
+  function start() {
+    if (!ctx || raf !== null) return;
+    raf = requestAnimationFrame(frame);
+  }
+
+  function stop() {
+    if (raf !== null) { cancelAnimationFrame(raf); raf = null; }
+  }
+
+  function drawOnce() { if (ctx) { stop(); frame(); stop(); } }
+
+  return {
+    init() {
+      if (!ctx) return;
+      readColours();
+      resize();
+      window.addEventListener('resize', () => {
+        resize();
+        if (motionOff) drawOnce();
+      });
+      // Pause when the tab is hidden; there is no point animating offscreen.
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden || motionOff) stop(); else start();
+      });
+      if (motionOff) drawOnce(); else start();
+    },
+    recolour() { readColours(); if (motionOff) drawOnce(); },
+    setMotion(off) { if (off) { stop(); drawOnce(); } else start(); },
+  };
+})();
+
+/* ────────────────────────── drifting formulae ───────────────────────── */
+
+function spawnDrifters(fragments) {
+  const layer = $('#drift');
+  if (!layer || !fragments.length) return;
+  layer.innerHTML = '';
+
+  const count = Math.min(fragments.length, window.innerWidth < 700 ? 8 : 16);
+  const accents = ['--a', '--b', '--c', '--d', '--e', '--f'];
+
+  for (let i = 0; i < count; i++) {
+    const el = document.createElement('div');
+    el.className = 'drifter';
+    renderTex(el, fragments[i % fragments.length], { display: false });
+
+    const fromLeft = Math.random() < 0.5;
+    el.style.left = `${fromLeft ? -12 : 100 + Math.random() * 10}%`;
+    el.style.top = `${Math.random() * 100}%`;
+    el.style.setProperty('--dx', `${(fromLeft ? 1 : -1) * (85 + Math.random() * 45)}vw`);
+    el.style.setProperty('--dy', `${(Math.random() - 0.5) * 60}vh`);
+    el.style.setProperty('--tilt', `${(Math.random() - 0.5) * 36}deg`);
+    el.style.setProperty('--sc', (0.65 + Math.random() * 0.7).toFixed(2));
+    el.style.color = `var(${accents[i % accents.length]})`;
+    el.style.fontSize = `${(0.75 + Math.random() * 0.8).toFixed(2)}rem`;
+    el.style.animationDuration = `${(26 + Math.random() * 38).toFixed(1)}s`;
+    el.style.animationDelay = `${(-Math.random() * 40).toFixed(1)}s`;
+    layer.appendChild(el);
+  }
+}
+
+function buildMarquee(fragments) {
+  const track = $('#marquee-a');
+  if (!track || !fragments.length) return;
+  track.innerHTML = '';
+  // Two copies: the -50% keyframe then loops seamlessly.
+  for (let pass = 0; pass < 2; pass++) {
+    fragments.forEach((tex) => {
+      const span = document.createElement('span');
+      renderTex(span, tex, { display: false });
+      span.setAttribute('aria-hidden', 'true');
+      track.appendChild(span);
+    });
+  }
+}
+
+/* ───────────────────────────── cursor trail ─────────────────────────── */
+
+function initCursorTrail() {
+  const layer = $('#cursor-trail');
+  if (!layer || window.matchMedia('(hover: none)').matches) return;
+
+  const accents = ['--a', '--b', '--c', '--e', '--f'];
+  let last = 0;
+  let hue = 0;
+
+  window.addEventListener('pointermove', (ev) => {
+    if (motionOff) return;
+    const now = performance.now();
+    if (now - last < 28) return; // throttle: ~35 dots/second, not 1 per pixel
+    last = now;
+
+    const dot = document.createElement('div');
+    dot.className = 'trail-dot';
+    dot.style.left = `${ev.clientX}px`;
+    dot.style.top = `${ev.clientY}px`;
+    dot.style.setProperty('--trail', `var(${accents[hue++ % accents.length]})`);
+    layer.appendChild(dot);
+    // The CSS animation is 700ms; clean up a hair later so nothing piles up.
+    setTimeout(() => dot.remove(), 760);
+  }, { passive: true });
+}
+
+/* ────────────────────────── scroll choreography ─────────────────────── */
+
+function initScroll() {
+  const bar = $('#scroll-progress i');
+
+  const onScroll = () => {
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    const pct = max > 0 ? (window.scrollY / max) * 100 : 0;
+    if (bar) bar.style.width = `${pct.toFixed(2)}%`;
+  };
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      entry.target.classList.add('in');
+      observer.unobserve(entry.target); // reveal once, then stop watching
+    });
+  }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' });
+
+  $$('.reveal').forEach((el) => observer.observe(el));
+}
+
+/** Stagger the theorem cards in as the wall scrolls into view. */
+function observeTheorems() {
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      const i = Number(entry.target.dataset.i || 0);
+      entry.target.style.animationDelay = motionOff ? '0ms' : `${(i % 8) * 70}ms`;
+      entry.target.classList.add('in');
+      observer.unobserve(entry.target);
+    });
+  }, { threshold: 0.15 });
+  $$('.theorem').forEach((el) => observer.observe(el));
+}
+
+/* ──────────────────────────── series section ────────────────────────── */
+
+const seriesState = { id: 'tan', terms: 8 };
+
+async function loadSeries() {
+  const path = `/api/series?f=${encodeURIComponent(seriesState.id)}&n=${seriesState.terms}`;
+  try {
+    const data = await api(path);
+    renderTex($('#series-display'), data.display, { display: true, pop: true });
+
+    renderLabelledNote($('#series-note'), data.name, data.note);
+
+    const strip = $('#series-coeffs');
+    if (strip) {
+      strip.innerHTML = '';
+      data.coefficients.forEach((co, i) => {
+        const cell = document.createElement('div');
+        cell.className = `coeff${co.value === 0 ? ' zero' : ''}`;
+        cell.style.animationDelay = motionOff ? '0ms' : `${i * 34}ms`;
+        const k = document.createElement('span');
+        k.className = 'k';
+        k.textContent = `c${co.k}`;
+        const v = document.createElement('span');
+        v.className = 'v';
+        renderTex(v, co.latex, { display: false });
+        cell.append(k, v);
+        strip.appendChild(cell);
+      });
+    }
+    setEndpoint($('#series-endpoint'), path);
+  } catch (err) {
+    showError($('#series-display'), err);
+  }
+}
+
+function buildSeriesChips(functions) {
+  const host = $('#series-chips');
+  if (!host) return;
+  host.innerHTML = '';
+  functions.forEach((fn) => {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.type = 'button';
+    chip.setAttribute('aria-pressed', String(fn.id === seriesState.id));
+    renderTex(chip, fn.latex, { display: false });
+    chip.addEventListener('click', () => {
+      seriesState.id = fn.id;
+      $$('.chip', host).forEach((c) => c.setAttribute('aria-pressed', String(c === chip)));
+      loadSeries();
+    });
+    host.appendChild(chip);
+  });
+}
+
+/* ──────────────────────────── matrix section ───────────────────────── */
+
+const matrixState = { n: 4, seed: 1 };
+
+async function loadMatrix() {
+  const path = `/api/matrix?n=${matrixState.n}&seed=${matrixState.seed}`;
+  try {
+    const data = await api(path);
+    renderTex($('#matrix-pmatrix'), data.pmatrix, { display: true, pop: true });
+    renderTex($('#matrix-det'), data.determinant, { display: true, pop: true });
+    renderTex($('#matrix-trace'), data.traceLatex, { display: true });
+    renderTex($('#matrix-charpoly'), data.charpoly, { display: true, pop: true });
+    setEndpoint($('#matrix-endpoint'), path);
+  } catch (err) {
+    showError($('#matrix-pmatrix'), err);
+  }
+}
+
+/* ──────────────────────────── cfrac section ────────────────────────── */
+
+const cfracState = { id: 'pi', depth: 6 };
+
+async function loadCfrac() {
+  const path = `/api/cfrac?c=${encodeURIComponent(cfracState.id)}&n=${cfracState.depth}`;
+  try {
+    const data = await api(path);
+    renderTex($('#cfrac-tower'), data.cfrac, { display: true, pop: true });
+    renderTex($('#cfrac-bracket'), data.bracket, { display: true, pop: true });
+    renderTex($('#cfrac-convergents'), data.convergents, { display: true });
+
+    const best = $('#cfrac-best');
+    if (data.best) {
+      renderTex(best, `${data.symbol} \\approx ${data.best.latex}, \\quad \\varepsilon = ${data.best.errorLatex}`, {
+        display: true, pop: true,
+      });
+    }
+
+    renderLabelledNote($('#cfrac-blurb'), data.id, data.blurb);
+    setEndpoint($('#cfrac-endpoint'), path);
+  } catch (err) {
+    showError($('#cfrac-tower'), err);
+  }
+}
+
+function buildCfracChips(constants) {
+  const host = $('#cfrac-chips');
+  if (!host) return;
+  host.innerHTML = '';
+  constants.forEach((c) => {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.type = 'button';
+    chip.setAttribute('aria-pressed', String(c.id === cfracState.id));
+    renderTex(chip, c.latex, { display: false });
+    chip.addEventListener('click', () => {
+      cfracState.id = c.id;
+      $$('.chip', host).forEach((x) => x.setAttribute('aria-pressed', String(x === chip)));
+      loadCfrac();
+    });
+    host.appendChild(chip);
+  });
+}
+
+/* ─────────────────────────── theorem wall ──────────────────────────── */
+
+async function buildTheoremWall() {
+  const wall = $('#theorem-wall');
+  if (!wall) return;
+  try {
+    const data = await api('/api/corpus');
+    wall.innerHTML = '';
+    data.entries.forEach((entry, i) => {
+      const card = document.createElement('article');
+      card.className = 'theorem';
+      card.dataset.i = String(i);
+      const h3 = document.createElement('h3');
+      h3.textContent = entry.title;
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = entry.tag;
+      const math = document.createElement('div');
+      math.className = 'math';
+      renderTex(math, entry.latex, { display: true });
+      card.append(h3, tag, math);
+      wall.appendChild(card);
+    });
+    observeTheorems();
+  } catch (err) {
+    showError(wall, err);
+  }
+}
+
+/* ───────────────────────────── api table ───────────────────────────── */
+
+const API_ROWS = [
+  ['/api/health', 'Liveness, plus a reminder that the backend has no dependencies.'],
+  ['/api/catalog', 'Everything the UI may ask for: function ids, constant ids, and the clamps.'],
+  ['/api/series?f=<em>id</em>&amp;n=<em>terms</em>', 'Truncated Taylor series over ℚ. Coefficients are exact fractions; tan and sec come from series division.'],
+  ['/api/matrix?n=<em>dim</em>&amp;seed=<em>k</em>', 'A seeded integer matrix with its Bareiss determinant, trace, and characteristic polynomial.'],
+  ['/api/cfrac?c=<em>id</em>&amp;n=<em>depth</em>', 'Continued-fraction tower, bracket notation, and the convergents with signed error.'],
+  ['/api/constants', 'The constants available to /api/cfrac, with values and commentary.'],
+  ['/api/corpus?tag=<em>tag</em>', 'The curated theorem corpus driving the wall; the tag filter is optional.'],
+  ['/api/drift', 'Short fragments for the background layer and the marquee.'],
+  ['/api/palette?seed=<em>k</em>', 'A golden-angle colour scheme. The whole site restyles from its eight stops.'],
+];
+
+function buildApiTable() {
+  const host = $('#api-table');
+  if (!host) return;
+  API_ROWS.forEach(([route, what]) => {
+    const row = document.createElement('div');
+    row.className = 'api-row';
+    const r = document.createElement('code');
+    r.className = 'route';
+    r.innerHTML = route; // fixed strings above, with <em> marking the parameters
+    const w = document.createElement('span');
+    w.className = 'what';
+    w.textContent = what;
+    row.append(r, w);
+    host.appendChild(row);
+  });
+}
+
+/* ──────────────────────────── motion toggle ────────────────────────── */
+
+function setMotion(off) {
+  motionOff = off;
+  document.body.classList.toggle('no-motion', off);
+  const btn = $('#toggle-motion');
+  if (btn) btn.setAttribute('aria-pressed', String(off));
+  lattice.setMotion(off);
+}
+
+function initMotionToggle() {
+  const btn = $('#toggle-motion');
+  if (btn) btn.addEventListener('click', () => setMotion(!motionOff));
+  // Honour the OS setting if it changes while the page is open.
+  prefersReducedMotion.addEventListener('change', (ev) => setMotion(ev.matches));
+  if (motionOff) setMotion(true);
+}
+
+/* ─────────────────────────────── controls ──────────────────────────── */
+
+function bindSlider(inputSel, outputSel, onChange) {
+  const input = $(inputSel);
+  const output = $(outputSel);
+  if (!input) return;
+  const sync = () => { if (output) output.textContent = input.value; };
+  sync();
+  input.addEventListener('input', sync);
+  // Commit on `change` so dragging does not fire a request per pixel.
+  input.addEventListener('change', () => onChange(Number(input.value)));
+}
+
+function initControls() {
+  bindSlider('#series-terms', '#series-terms-out', (v) => { seriesState.terms = v; loadSeries(); });
+  bindSlider('#matrix-dim', '#matrix-dim-out', (v) => { matrixState.n = v; loadMatrix(); });
+  bindSlider('#cfrac-depth', '#cfrac-depth-out', (v) => { cfracState.depth = v; loadCfrac(); });
+
+  $('#matrix-reroll')?.addEventListener('click', () => {
+    matrixState.seed = Math.floor(Math.random() * 1e6);
+    loadMatrix();
+  });
+  $('#palette-reroll')?.addEventListener('click', () => rerollPalette());
+  $('#shuffle-palette')?.addEventListener('click', () => rerollPalette());
+}
+
+/* ──────────────────────────────── boot ─────────────────────────────── */
+
+async function boot() {
+  renderStaticTex();
+  buildApiTable();
+  initMotionToggle();
+  initScroll();
+  initCursorTrail();
+  initControls();
+  lattice.init();
+
+  // Background decoration and the live panels are independent; a failure in
+  // one must not leave the others unpopulated.
+  const results = await Promise.allSettled([
+    api('/api/drift').then((d) => { spawnDrifters(d.fragments); buildMarquee(d.fragments); }),
+    api('/api/catalog').then((d) => { buildSeriesChips(d.functions); buildCfracChips(d.constants); }),
+    buildTheoremWall(),
+    rerollPalette(7),
+    loadSeries(),
+    loadMatrix(),
+    loadCfrac(),
+  ]);
+
+  results.filter((r) => r.status === 'rejected')
+         .forEach((r) => console.error('chromatex boot:', r.reason));
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot);
+} else {
+  boot();
+}

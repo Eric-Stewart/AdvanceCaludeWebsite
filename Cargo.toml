@@ -1,0 +1,13 @@
+[package]
+name = "chromatex"
+version = "0.1.0"
+edition = "2021"
+description = "A LaTeX-saturated, heavily animated site served by a dependency-free Rust backend"
+
+# No dependencies on purpose: the whole backend is std, so this builds with
+# nothing but a Rust toolchain and no network access.
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
