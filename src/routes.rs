@@ -9,6 +9,15 @@ use crate::matrix::{IntMatrix, MAX_DIM};
 use crate::palette::Palette;
 use crate::series::{self, MAX_TERMS};
 
+/// Seeds the UI is allowed to reroll through, for both `/api/matrix` and
+/// `/api/palette`: the valid range is `1..=SEED_POOL`.
+///
+/// The live server would happily accept any `u64`, but the static export has
+/// to enumerate a finite set. Bounding both modes to the same pool keeps the
+/// two deployments behaviourally identical instead of letting the hosted build
+/// quietly diverge from the one developed against.
+pub const SEED_POOL: u64 = 128;
+
 /// Returns `None` for anything that is not an API route, letting the caller
 /// fall through to static files.
 pub fn route(req: &Request) -> Option<Response> {
@@ -110,6 +119,13 @@ fn catalog_response() -> Response {
             ("constants", Json::arr(constants)),
             ("maxTerms", Json::Int(MAX_TERMS as i128)),
             ("maxDim", Json::Int(MAX_DIM as i128)),
+            (
+                "seedPool",
+                Json::obj([
+                    ("matrix", Json::Int(SEED_POOL as i128)),
+                    ("palette", Json::Int(SEED_POOL as i128)),
+                ]),
+            ),
         ])
         .to_string(),
     )

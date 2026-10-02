@@ -9,6 +9,7 @@
 
 mod cfrac;
 mod corpus;
+mod export;
 mod http;
 mod json;
 mod matrix;
@@ -25,12 +26,16 @@ struct Config {
     addr: String,
     static_root: PathBuf,
     workers: usize,
+    /// When set, build the static site into this directory and exit instead
+    /// of serving.
+    emit_static: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Config, String> {
     let mut port = DEFAULT_PORT;
     let mut host = "127.0.0.1".to_string();
     let mut static_root: Option<PathBuf> = None;
+    let mut emit_static: Option<PathBuf> = None;
     let mut workers = std::thread::available_parallelism()
         .map(|n| n.get() * 2)
         .unwrap_or(8)
@@ -57,6 +62,10 @@ fn parse_args() -> Result<Config, String> {
                 static_root = Some(PathBuf::from(next(i)?));
                 i += 2;
             }
+            "--emit-static" => {
+                emit_static = Some(PathBuf::from(next(i)?));
+                i += 2;
+            }
             "--workers" => {
                 workers = next(i)?
                     .parse::<usize>()
@@ -67,7 +76,9 @@ fn parse_args() -> Result<Config, String> {
             "--help" | "-h" => {
                 println!(
                     "chromatex\n\n\
-                     USAGE:\n  chromatex [--host H] [--port P] [--static DIR] [--workers N]\n\n\
+                     USAGE:\n  \
+                       chromatex [--host H] [--port P] [--static DIR] [--workers N]\n  \
+                       chromatex --emit-static DIR     build the deployable static site and exit\n\n\
                      Defaults: host 127.0.0.1, port {DEFAULT_PORT}, static ./static"
                 );
                 std::process::exit(0);
@@ -84,6 +95,7 @@ fn parse_args() -> Result<Config, String> {
         addr: format!("{host}:{port}"),
         static_root,
         workers,
+        emit_static,
     })
 }
 
@@ -106,6 +118,21 @@ fn main() {
     }
 
     println!("\n  \\chromatex");
+
+    if let Some(out) = config.emit_static {
+        match export::emit(&out, &config.static_root) {
+            Ok((copied, written)) => {
+                println!("  exported {copied} static files + {written} api responses");
+                println!("  → {}", out.display());
+                return;
+            }
+            Err(e) => {
+                eprintln!("chromatex: export to {} failed: {e}", out.display());
+                std::process::exit(1);
+            }
+        }
+    }
+
     if let Err(e) = http::serve(&config.addr, config.static_root, config.workers, routes::route) {
         eprintln!("chromatex: could not serve on {}: {e}", config.addr);
         std::process::exit(1);

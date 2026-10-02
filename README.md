@@ -14,7 +14,7 @@ cargo run --release
 # → http://127.0.0.1:8080
 ```
 
-Options: `--host`, `--port`, `--static DIR`, `--workers N`, `--help`.
+Options: `--host`, `--port`, `--static DIR`, `--workers N`, `--emit-static DIR`, `--help`.
 
 ## What the backend actually computes
 
@@ -74,12 +74,45 @@ All of it is gated two ways:
 Colours live entirely in CSS custom properties written from the palette
 endpoint, so recolouring the whole site is eight property writes.
 
+## Deployment
+
+GitHub Pages cannot run the backend, so the backend runs at build time instead:
+
+```sh
+cargo run --release -- --emit-static dist
+```
+
+This walks the full (finite) parameter space of the API and writes every
+response to a file under `dist/data/`. It does so by building real `Request`
+values and calling the same `routes::route` handler the live server uses, so an
+exported file is byte-identical to what `GET`ting that URL would have returned —
+there is no second implementation of the maths to drift out of sync.
+
+The front end detects which deployment it is in by probing `data/static.json`,
+then maps logical API URLs to exported files. Everything else in the code (and
+everything the UI displays) still speaks in `/api/...` URLs. Paths are resolved
+against `document.baseURI`, so the site works both at a domain root and at a
+project subpath like `/AdvanceCaludeWebsite/`.
+
+The one behavioural consequence: reroll seeds come from a bounded pool
+(`routes::SEED_POOL`, currently `1..=128`) rather than being unbounded. **Both**
+deployments use that same pool, so the hosted build cannot silently diverge from
+the one you develop against.
+
+`.github/workflows/pages.yml` runs the tests, builds the export, asserts the
+tree is complete and contains no `"ok":false` payloads, and publishes to Pages
+on every push to `main`.
+
 ## Tests
 
 ```sh
-cargo test              # 57 unit tests
+cargo test               # 61 unit tests
 python3 scripts/smoke.py # end-to-end, needs firefox + geckodriver
 ```
+
+`scripts/smoke.py` takes `CHROMATEX_URL`, so the same suite runs against the
+live server, against the static export served by any plain file server, and
+against the export mounted at a subpath — all three are verified.
 
 The unit tests check the mathematics against known values rather than against
 the implementation: `tan`'s coefficients to x⁹, `sec`'s to x⁶, π's continued
